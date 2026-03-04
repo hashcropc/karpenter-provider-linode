@@ -156,7 +156,7 @@ func (p *DefaultProvider) resolveCreateInstanceType(ctx context.Context, instanc
 }
 
 func (p *DefaultProvider) lookupExistingInstance(ctx context.Context, nodeClaim *karpv1.NodeClaim) (*instance.Instance, error) {
-	existingInstance, err := utils.LookupInstanceByTag(ctx, p.client, fmt.Sprintf("%s=%s", v1alpha1.NodeClaimTagKey, nodeClaim.Name))
+	existingInstance, err := utils.LookupInstanceByTag(ctx, p.client, utils.NodeClaimTag(nodeClaim.Name))
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func (p *DefaultProvider) findOrCreatePool(ctx context.Context, nodeClass *v1alp
 		Count:  1,
 		Type:   instanceType,
 		Tags:   tagList,
-		Labels: nodeClass.Spec.Labels,
+		Labels: lkeLabelsFromNodeClaim(nodeClaim),
 		// Eventually we need to differentiate between taints and startup taints on LKE API
 		Taints: convertToLkeTaints(append(nodeClaim.Spec.Taints, nodeClaim.Spec.StartupTaints...)),
 	}
@@ -349,10 +349,9 @@ func (p *DefaultProvider) findClaimableInstanceEnterprise(ctx context.Context, p
 }
 
 func (p *DefaultProvider) claimInstance(ctx context.Context, linodeInstance *linodego.Instance, nodeClaim *karpv1.NodeClaim, pool *linodego.LKENodePool) (*linodego.Instance, error) {
-	instanceTags := utils.GetInstanceTagsForLKE(nodeClaim.Name)
 	newTags := append([]string{}, linodeInstance.Tags...)
 	newTags = append(newTags, pool.Tags...)
-	newTags = append(newTags, utils.MapToTagList(instanceTags)...)
+	newTags = append(newTags, utils.NodeClaimTag(nodeClaim.Name))
 	newTags = utils.DedupeTags(newTags)
 
 	_, err := p.client.UpdateInstance(ctx, linodeInstance.ID, linodego.InstanceUpdateOptions{
@@ -367,7 +366,7 @@ func (p *DefaultProvider) claimInstance(ctx context.Context, linodeInstance *lin
 
 func (p *DefaultProvider) verifyTagsApplied(ctx context.Context, instanceID int, nodeClaimName string) (*linodego.Instance, error) {
 	deadline := time.Now().Add(p.config.TagVerificationTimeout)
-	expectedTag := fmt.Sprintf("%s=%s", v1alpha1.NodeClaimTagKey, nodeClaimName)
+	expectedTag := utils.NodeClaimTag(nodeClaimName)
 
 	for time.Now().Before(deadline) {
 		select {
@@ -553,6 +552,17 @@ func convertToLkeTaints(taints []corev1.Taint) []linodego.LKENodePoolTaint {
 		})
 	}
 	return res
+}
+
+func lkeLabelsFromNodeClaim(nodeClaim *karpv1.NodeClaim) linodego.LKENodePoolLabels {
+	if len(nodeClaim.Labels) == 0 {
+		return nil
+	}
+	labels := make(linodego.LKENodePoolLabels, len(nodeClaim.Labels))
+	for key, value := range nodeClaim.Labels {
+		labels[key] = value
+	}
+	return labels
 }
 
 func (p *DefaultProvider) cacheNode(n *instance.Instance) {

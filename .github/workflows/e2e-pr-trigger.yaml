@@ -1,0 +1,53 @@
+name: e2e-pr-trigger
+
+on:
+  pull_request: # TODO: change this to pull_request_target so people don't need to set their own LINODE_TOKEN secret in their forks
+    types: [opened, reopened, synchronize]
+    branches:
+      - '**'
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    outputs:
+      paths: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Harden Runner
+        uses: step-security/harden-runner@v2
+        with:
+          disable-sudo: true
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: .github/filters.yml
+
+  e2e-pr:
+    needs: [changes]
+    if: github.event_name == 'pull_request' && github.event.action != 'closed' && contains(fromJSON(needs.changes.outputs.paths), 'src')
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      cluster_name: ${{ format('karpl-pr-{0}', github.event.pull_request.number) }}
+      chainsaw_selector: pr
+      cleanup: false
+      timeout_minutes: 60
+      cleanup_timeout_minutes: 20
+    secrets: inherit
